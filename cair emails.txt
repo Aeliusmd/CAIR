@@ -224,6 +224,19 @@ Endpoint: https://cdph-interop-stage.cdph.ca.gov/services/client_Service.client_
 You may proceed with testing in the CAIR onboarding environment. 
 
 Once you begin submitting test messages, please let us know and we can review the submissions and responses for any errors or warnings that may need to be addressed before moving forward. 
+The following tables are ready to be used by the background service for the CAIR submission:
+
+ 
+
+EHRHeaders – Check the records where IsPublish = true.
+
+ 
+
+EHRVaccines – Retrieve the vaccine information.
+
+ 
+
+EHRVaccineThirdPartySubmissions – Update the submission status in this table after the CAIR submission is completed
 
 
  

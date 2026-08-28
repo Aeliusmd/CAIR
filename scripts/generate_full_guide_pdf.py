@@ -599,6 +599,8 @@ def build_story(s):
                 ["File", "Purpose"],
                 ["cair_service.py", "Main background worker - run continuously"],
                 ["demo_build_vxu.py", "Generate sample HL7 without database"],
+                ["scripts/seed_sithum_cair_test_data.py", "Dev: insert test vaccines + CAIR queue rows"],
+                ["run_dry_once.py", "One worker cycle — read DB, build HL7 (dry-run)"],
                 ["cair_integration/hl7/vxu_builder.py", "Builds HL7 VXU from data models"],
                 ["cair_integration/cair/soap_client.py", "Sends HL7 to CAIR SOAP endpoint"],
                 ["cair_integration/cair/ack_parser.py", "Parses ACK response (AA/AE/AR)"],
@@ -615,14 +617,32 @@ def build_story(s):
     story.append(Spacer(1, 10))
     story.append(h2("Environment Variables (.env)", s))
     story.append(
+        p(
+            "<b>QA mode</b> — MASTER_DB_* + ClinicSetup. "
+            "<b>Development mode</b> — CLINIC_DB_* direct to Sithum clinic DB (skips ClinicSetup).",
+            s,
+        )
+    )
+    story.append(
         code(
+            "# Development (Sithum clinic DB)\n"
+            "APP_ENV=development\n"
+            "CLINIC_DB_SERVER=10.103.0.211\n"
+            "CLINIC_DB_NAME=ClaudMD_Development_Sithum\n"
+            "CLINIC_DB_USER=testuser\n"
+            "CLINIC_DB_PASSWORD=***\n"
+            "\n"
+            "# QA (master DB + ClinicSetup)\n"
             "MASTER_DB_SERVER=10.103.0.201\n"
             "MASTER_DB_NAME=ClaudMD_QA_Setup\n"
             "MASTER_DB_USER=testuser\n"
             "MASTER_DB_PASSWORD=***\n"
             "DEFAULT_ACTIVATION_KEY=20000002\n"
+            "\n"
             "CAIR_SOAP_URL=https://cdph-interop-stage.cdph.ca.gov/services/\n"
             "  client_Service.client_ServiceHttpSoap12Endpoint\n"
+            "CAIR_SOAP_USERNAME=   # required to send HL7\n"
+            "CAIR_SOAP_PASSWORD=   # required to send HL7\n"
             "SENDING_FACILITY_ID=SF-013259\n"
             "RECEIVING_FACILITY=CAIR2\n"
             "WORKER_BATCH_SIZE=100\n"
@@ -635,9 +655,33 @@ def build_story(s):
     story.append(
         code(
             "pip install -r requirements.txt\n"
-            "python demo_build_vxu.py       # Test HL7 message generation\n"
+            "python scripts/seed_sithum_cair_test_data.py seed    # dev test data\n"
+            "python scripts/seed_sithum_cair_test_data.py verify  # check queue\n"
+            "python demo_build_vxu.py       # Test HL7 without database\n"
+            "python run_dry_once.py         # Build HL7 from DB (no CAIR send)\n"
             "python cair_service.py         # Start background worker",
             s,
+        )
+    )
+    story.append(h2("Development Testing (Sithum DB)", s))
+    story.append(
+        p(
+            "The seed script inserts EHRVaccines and EHRVaccineThirdPartySubmissions for testing. "
+            "<b>It does not send HL7.</b> SubmitStatus stays 0 and RequestPayload is empty until "
+            "cair_service.py runs with valid CAIR SOAP credentials.",
+            s,
+        )
+    )
+    story.append(
+        table(
+            [
+                ["Seed command", "Purpose"],
+                ["list", "Show published visits and existing submissions"],
+                ["seed", "Create test vaccines + queue rows (SubmitStatus=0)"],
+                ["verify", "Confirm worker can pick up pending rows"],
+                ["reset", "Reset LOT-CAIR-TEST-* rows back to PENDING"],
+            ],
+            [6 * cm, 11.5 * cm],
         )
     )
 
@@ -719,12 +763,16 @@ def build_story(s):
     # 13 TESTING
     story.append(h1("13. Testing Checklist", s))
     for item in [
-        "Configure .env with stage SOAP endpoint and SF-013259",
+        "Configure .env — CLINIC_DB_* for Sithum dev or MASTER_DB_* for QA",
+        "Run scripts/seed_sithum_cair_test_data.py seed then verify (dev DB)",
+        "Confirm SubmitStatus=0 and RequestPayload empty — no HL7 sent yet",
+        "Configure .env with stage SOAP endpoint, credentials, and SF-013259",
         "Run demo_build_vxu.py and verify HL7 output matches CAIR sample format",
+        "Run run_dry_once.py to build HL7 from real DB rows without sending",
         "Create test patient with CellPhone AND Email populated",
         "Create EHRVaccines record with IsVaccine=1, LotNumber, Route, Dosage filled",
         "Add CVX/MVX codes to the linked ServiceCode record",
-        "Submit test message to CAIR stage endpoint",
+        "Submit test message to CAIR stage endpoint (cair_service.py)",
         "Email CAIRDataExchange@cdph.ca.gov to request review of test submissions",
         "Fix any ERR warnings in ACK response",
         "Switch to production endpoint after CAIR approval",

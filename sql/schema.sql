@@ -1,3 +1,11 @@
+-- LEGACY / OPTIONAL
+-- ClaudMD already provides these tables for CAIR — use them instead of cair_outbox:
+--   EHRHeaders (IsPublish = 1)
+--   EHRVaccines
+--   EHRVaccineThirdPartySubmissions (SubmitStatus)
+--
+-- Only run this script if you need a standalone outbox for a non-ClaudMD deployment.
+
 -- Per-clinic database: run this on each clinic database
 -- Creates outbox table for CAIR VXU submissions
 

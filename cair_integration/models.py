@@ -102,6 +102,18 @@ class VxuPayload:
 
 
 @dataclass
+class CairSubmissionRecord:
+    """Row from EHRVaccineThirdPartySubmissions ready for CAIR processing."""
+
+    id: int
+    ehr_vaccine_id: int
+    submit_status: int
+    attempt_count: int
+    checkin_id: int
+    error_message: Optional[str] = None
+
+
+@dataclass
 class OutboxRecord:
     id: int
     vaccination_id: int
