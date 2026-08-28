@@ -1,0 +1,229 @@
+CAIR sample HL7
+
+MSH|^~\&||CA0012345||CAIR2|20260816023022-0700||VXU^V04^VXU_V04|3f2504e0-4f89-11d3-9a0c-0305e82c3301|P|2.5.1|||AL|AL|||||Z22^CDCPHINVS|CA0054321
+PID|1||AC10293^^^CA0012345^MR||Alvarez^Maria^^^^^|^^^^^^|19880412|F||2106-3^^CDCREC|123 Main St^^Sacramento^CA^95814||^NET^Internet^maria.alvarez@example.com~^PRN^CP^^^916^5550134||^^|||||||2186-5^^CDCREC|||
+PD1|||||||||||^^|N|20260810|||||
+ORC|RE|48213^CMC|48213^CMC|||||||||
+RXA|0|1|20260810||00069-1000-03^^NDC|0.3|mL^^UCUM||00^NEW IMMUNIZATION RECORD^NIP001||^^^CA0054321||||FA7205||PFR^^MVX|||CP|A|20260816023022-0700
+OBX|1|CE|64994-7^Vaccine funding program eligibility category^LN|1|V01^Not VFC eligible^HL70064||||||F|||20260810
+
+
+For information on reporting COVID vaccine doses to CAIR2, please visit our website - https://www.cdph.ca.gov/Programs/CID/DCDC/CAIR/Pages/CAIR-updates.aspx
+
+If you need information on Data Exchange, please visit https://www.cdph.ca.gov/Programs/CID/DCDC/CAIR/Pages/CAIR-DX.aspx
+Looking for your immunization record?
+Request Digital COVID-19 Vaccine Record  
+
+
+Dear CAIR2 Data Exchange Sites/Vendors, 
+You are receiving this email because it was found that your site is continuing to send your vaccination data to CAIR2 via the CDPH Rhapsody gateway using the old WSDL/Endpoint URLs. 
+As stated in previous email communications sent by CDPH over the past few months, the CDPH Rhapsody gateway was migrated to the cloud on August 31, 2021.  CAIR has allowed the old endpoint to remain active after the deadline of August 31, 2021, however there will be a hard cut-off of the old WSDL/Endpoint URLs on November 15, 2021.  Vaccination messages sent to the old WSDL/Endpoint URLs will not be accepted after November 15, 2021.  Please update your interface to point to the new endpoint/WSDL.  QBPs are no longer accepted if sent to the old WSDL URL.  You will receive a query response asking your site to submit to the new endpoint(see below URLs).   
+Note: If you recently migrated over to the new WSDL/Endpoint, you can ignore this email.   
+The move to the new cloud endpoint requires that providers change their submission destination URL as follows: 
+•	From (old):  https://cair.cdph.ca.gov/CAPRD-WS/IISService 
+•	To (new):  https://cdph-interop-prod.cdph.ca.gov/services/client_Service.client_ServiceHttpSoap12Endpoint
+To also implement the new SOAP operation, messages will be submitted via the following SOAP operations:
+WSDL 	https://cdph-interop-prod.cdph.ca.gov/CAPRD-WS/IISService?WSDL
+
+Endpoint 	https://cdph-interop-prod.cdph.ca.gov/services/client_Service.client_ServiceHttpSoap12Endpoint
+
+Operations 
+VXU 	submitSingleMessage 
+QBP 	submitSingleQuery 
+See detailed instructions to test and implement the optional SOAP operation.  
+Please work with your integration team or EHR vendor to ensure changes are made ASAP.  
+Thank you for your patience and continued support as we work to bolster performance of CAIR2, our state immunization registry.   
+Please send any questions or concerns to CAIRDataExchange@cdph.ca.gov.  
+CAIR2 DX Team
+
+
+HI CAIR Data Exchange (CDPH-CID-DCDC-IMM),
+ 
+During the data submission, if any of these field “phone number”, “cell phone” and “Email address” is missing CAIR is not accepting the message.
+Some of the patients don’t have email or phone number.
+Please advise.
+ 
+Errors
+ 
+ERR||PID^1^13|101^Required field missing^HL70357|W|4^Invalid value^HL70533|||Warning: Home Phone or Cell Phone is missing or invalid. Correct and resubmit.
+ 
+ERR||PID^1^13|102^Data type error^HL70357|W|4^Invalid value^HL70533|||Warning: Invalid Client Email. Correct and resubmit.
+ 
+ 
+ 
+In order to facilitate Californians' access to their Digital COVID-19 Vaccine Records (DCVR) and to enable the California Department of Public Health to effectively contact individuals for public health purposes such as second dose and booster dose reminders, it is necessary to send mobile phone and/or email address in the vaccination messages submitted to your local immunization registry (CAIR2, SDIR, RIDE).
+ 
+Mobile Phone and Email address should be sent in the PID-13 field of the HL7 VXU message submitted to the immunization registry. The phone and email address can be in any order within the PID-13 field, as long as the formatting of the field is correct. An example of the formatting of the PID-13 field is shown below.  
+ 
+Phone number field (PID-13)
+ 
+PID-13.2 = PRN
+PID-13.3 = PH (home) or CP (cell phone)
+PID-13.6 = area code
+PID-13.7 = telephone number
+ 
+Email address
+ 
+PID-13.2 = NET
+PID-13.3 = Internet or X.400
+PID-13.4 = valid email address only
+ 
+PID-13 examples:
+ 
+Submitting home phone, email, mobile phone (cell phone):      
+|^PRN^PH^^^213^5555555~^NET^Internet^validemail@email.com~^PRN^CP^^^213^5551234|        
+ 
+Submitting home phone and mobile phone:                                             
+|^PRN^PH^^^213^5555555~^PRN^CP^^^213^5551234|
+ 
+Submitting mobile phone:                                                
+|^PRN^CP^^^213^5551234|
+ 
+Tips for Ensuring Submission of Contact Information:
+<![if !supportLists]>•         <![endif]>Evaluate and update your patient intake forms and processes to collect mobile phone number or email address along with accurate name and date of birth.
+<![if !supportLists]>•         <![endif]>Update training materials as needed. Alert staff of the protocols outlined in the new Public Health Officer Order.
+<![if !supportLists]>•         <![endif]>Work with your EHR vendor to verify that these data elements are included in your submissions to the registry (CAIR2, SDIR, RIDE) and submission logic is set to grant preference to mobile phone instead of home phone.
+If you need assistance with data submission requirements, send an email to CAIRDataExchange@cdph.ca.gov. 
+Thank you for your continued partnership and all you do to keep Californians healthy and safe!
+CAIR2 Team
+ 
+ 	 
+
+ 
+The fields the EMR needs so vaccinations can be reported to California's
+immunization registry.
+Background
+California requires every vaccination given at our clinics to be reported to
+CAIR2, the state immunization registry.
+The EMR records which vaccine was given using our internal service code and a
+CPT billing code. The registry accepts neither. It identifies the product by CVX,
+the national vaccine code published by the CDC, and the maker by MVX.
+Neither exists in the schema today, so no vaccination can currently be reported.
+This document lists the fields required, and the rules worth enforcing when they
+are added.
+What we are asking for
+1. Add the fields below to 
+ServiceCodes , or to a vaccine-product table of your
+design — whichever fits your pattern.
+2. Enforce the four rules, so an incorrect code cannot be saved in the first place.
+Fields to add
+Grouped by how badly the registry needs each one. Names are suggestions —
+match your own conventions.
+MUST HAVE Nothing can be reported without these
+FIELD TYPE WHAT IT IS
+CvxCode varchar(10) The national vaccine code. This is the one the registry
+matches on. Example: 43 = Hep B adult. Note it is a string,
+not a number — some codes carry a leading zero (09),
+which an integer column would silently destroy.
+MvxCode varchar(10) Manufacturer code. Example: SKB = GlaxoSmithKline. CVX
+and MVX together identify the actual brand.
+IsVaccineProduct bit Separates a real vaccine from an administration fee or
+supply code. Several service codes named Admin of
+Vaccination… are fees and must never be reported as a
+vaccine.
+RegistryApprovedOn date When a clinician confirmed this mapping. Null must mean
+do not report. See the safety note below.
+SHOULD HAVE The registry warns or rejects without these
+FIELD TYPE WHAT IT IS
+RouteCode varchar(20) How it is given. C28161 = intramuscular, C38299 = subcutaneous.
+The registry rejects a dose with no route. The EMR captures this
+as free text today and it is almost always empty, so a per-product
+default is the practical fix.
+DoseAmount
+DoseUnit
+decimal(9,3)
+varchar(12)
+Standard dose, e.g. 0.5 and mL .
+Ndc11 varchar(11) The product code in its 11-digit form. The existing NDCNumber
+column holds a mix of 10 and 11 digit values, and a bare 10-digit
+NDC is genuinely ambiguous — see rule 3.
+CvxText
+MvxText
+varchar(200) The CDC's own wording for each code, so screens and reports can
+show a name rather than a number.
+NICE TO HAVE Improves quality, not blocking
+FIELD TYPE WHAT IT IS
+BodySiteCode varchar(10) Default injection site, e.g. LD = left deltoid.
+VisDocumentCode
+VisPublishedOn
+varchar(40)
+date
+The patient information sheet given with the vaccine. The
+registry asks for it on doses we administered.
+EffectiveFrom
+EffectiveTo
+date Lets one service code carry different codes over time.
+Matters for influenza — see rule 4.
+RegistryApprovedBy varchar(100) Who signed it off, alongside the date.
+Four rules worth enforcing in the schema
+These matter more than the field list. A wrong code here lands on a patient's
+permanent state immunization record.
+1 · CVX must come from a list, never free text
+Please load the CDC's published code list into a reference table and make the
+field a lookup rather than a text box. The CDC publishes it as plain pipe
+delimited text, no licence or login:
+https://www2a.cdc.gov/vaccines/iis/iisstandards/downloads/cvx.txt —
+289 codes, and the same for mvx.txt . A typo in a free-text CVX field is a
+different vaccine, silently.
+2 · Only Active CVX codes for products still in use
+The CDC list carries a status per code. 118 of the 289 are Inactive — retired
+products, kept in the list only so historical records can still be transmitted.
+Using one for a vaccine given today misrepresents what was administered.
+Nothing about the number itself signals this. Rabies is the easy trap: 18
+reads like a perfectly ordinary code, but it was retired and the current one is
+176 . The status column is the only way to tell, so it is worth blocking inactive
+codes at entry rather than relying on whoever fills the field.
+3 · Store NDC as 11 digits, or keep its dashes
+A bare 10-digit NDC cannot be converted reliably. 4928101050 could be any
+of three different products, depending on where the segment boundaries fall:
+4928101050  →  4928-1010-50  →  04928101050
+            →  49281-010-50  →  49281001050
+            →  49281-0105-0  →  49281010500
+There is no way to tell them apart from the digits alone. If the EMR captures
+the dashes at entry, or stores the 11-digit form, the ambiguity disappears at
+the source.
+4 · Influenza changes almost every year
+One service code named Vaccine: Influenza cannot carry one CVX forever
+— the formulation changes each season, and the preservative-free and
+preserved presentations are different codes (150 and 158) even though
+they are the same vaccine. Either create a new service code each season, or
+add the EffectiveFrom / EffectiveTo dates above. Worth deciding now
+rather than at the first flu season.
+Safety: a null approval date must mean "do not report"
+Please make the default off. A vaccine with no clinician sign-off should be
+held back and flagged, never reported with a guessed code. It is the
+difference between a visible gap, which someone can fix, and a wrong entry
+on a patient's medical record, which nobody notices.
+Two things worth fixing while you are in there
+Both showed up while working out what the registry would need. Neither is
+caused by CAIR2, and both are worth correcting regardless.
+Some vaccine service codes carry a billing code that is not a vaccine
+SERVICE CODE CPT WHAT THAT CPT ACTUALLY IS
+Vaccine: Influenza 86710 An influenza antibody lab test — not a vaccine at all
+y
+Vaccine: H1N1 90782 A deleted code for administering an injection, not a
+product
+Vaccine: Td 99070 A generic supplies and materials code
+These cannot be mapped to a vaccine code until the underlying billing code is
+corrected, so they are worth looking at early.
+Route and lot number are almost never filled in
+The vaccine record has fields for route, body site, lot number and expiry, but
+they are empty on essentially every dose. Route is the one that blocks
+reporting outright. A per-product default in the schema covers it, but making
+the fields required at entry would be the stronger fix.
+
+The Aeliusmd Inc organization, CAIR Org Code SF-013259, has now been activated in the CAIR onboarding. 
+
+Please see the CAIR onboarding details: 
+
+    CAIR org Code: SF-013259
+    Endpoint ONB (ONBOARDING): Used for DX testing by DX providers and DX team.  All data runs through Rhapsody.
+WSDL:  https://cdph-interop-stage.cdph.ca.gov/CASTG-WS/IISService?WSDL
+Endpoint: https://cdph-interop-stage.cdph.ca.gov/services/client_Service.client_ServiceHttpSoap12Endpoint
+
+You may proceed with testing in the CAIR onboarding environment. 
+
+Once you begin submitting test messages, please let us know and we can review the submissions and responses for any errors or warnings that may need to be addressed before moving forward. 
+
+
+ 
