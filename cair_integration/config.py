@@ -89,6 +89,7 @@ class Settings:
     responsible_org_id: str
     processing_id: str
     default_activation_key: str
+    log_dir: str
 
 
 def get_settings() -> Settings:
@@ -111,4 +112,5 @@ def get_settings() -> Settings:
         responsible_org_id=os.getenv("RESPONSIBLE_ORG_ID", "SF-013259"),
         processing_id=os.getenv("PROCESSING_ID", "P"),
         default_activation_key=os.getenv("DEFAULT_ACTIVATION_KEY", ""),
+        log_dir=os.getenv("LOG_DIR", "logs"),
     )
