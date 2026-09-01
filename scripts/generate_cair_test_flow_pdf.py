@@ -99,9 +99,10 @@ def build():
         "Synced Sithum dev DB (ClaudMD_Development_Sithum) with QA_2 so all CAIR tables/columns match.",
         "Configured .env for Sithum dev using CLINIC_DB_* (direct clinic DB connection).",
         "Created scripts/seed_sithum_cair_test_data.py to insert test vaccines + queue rows for testing.",
-        "Seeded 7 pending submissions in Sithum DB — no HL7 sent to CAIR yet.",
-        "Added docs/PDFs with setup, flow, and testing steps.",
-        "Org code from onboarding email is set: SF-013259. Stage SOAP URL is set.",
+        "Seeded 7 test submissions in Sithum DB; test sends attempted to CAIR onboarding endpoint.",
+        "Fixed SOAP client to SOAP 1.2 per CAIR WSDL (was HTTP 500 with old SOAP 1.1 envelope).",
+        "Org code from onboarding email is set: SF-013259. Stage/onboarding SOAP URL is set.",
+        "Waiting on CAIR SOAP username/password (CAIR_SOAP_USERNAME / CAIR_SOAP_PASSWORD in .env).",
     ]:
         story.append(bullet(item, s))
 
@@ -193,11 +194,12 @@ def build():
             ["1", "Load patient + vaccine from DB (JOIN Patients, EHRVaccines, etc.)",
              "VxuPayload"],
             ["2", "Build HL7 VXU message", "vxu_builder.py"],
-            ["3", "POST SOAP submitSingleMessage to CAIR endpoint", "soap_client.py"],
+            ["3", "POST SOAP 1.2 submitSingleMessage (username, password, facilityID, hl7Message)",
+             "soap_client.py"],
             ["4", "Parse ACK (MSA segment)", "ack_parser.py — AA / AE / AR"],
             ["5a", "ACK = AA (accept)", "SubmitStatus=1, save HL7+ACK, IsSubmitted=1"],
-            ["5b", "ACK = AE or timeout (temp error)", "SubmitStatus=3, AttemptCount+1, retry later"],
-            ["5c", "ACK = AR or max retries (5)", "SubmitStatus=2, save ErrorMessage"],
+            ["5b", "HTTP error, ACK = AE, or timeout (temp error)", "SubmitStatus=3, AttemptCount+1, retry later"],
+            ["5c", "Missing SOAP credentials or ACK = AR / max retries (5)", "SubmitStatus=2, save ErrorMessage"],
         ],
         [0.08, 0.52, 0.40],
         s,
@@ -237,26 +239,40 @@ def build():
     story.append(PageBreak())
     story.append(Paragraph("3. CAIR Endpoints &amp; DB (Sithum Dev Now)", s["h1"]))
 
-    story.append(Paragraph("CAIR SOAP Endpoints (Test vs Real)", s["h2"]))
+    story.append(Paragraph("CAIR SOAP Endpoints (Onboarding vs Production)", s["h2"]))
     story.append(P(
-        "<b>Test endpoint (used now):</b> Stage/onboarding URL in .env (CAIR_SOAP_URL) on "
-        "<b>cdph-interop-stage.cdph.ca.gov</b> — for SF-013259 testing only; HL7 is sent here via "
-        "<b>submitSingleMessage</b>. "
-        "<b>Real endpoint (later):</b> Production URL on <b>cdph-interop-prod.cdph.ca.gov</b> — "
-        "switch after CAIR approves go-live; same operation, different server.",
+        "<b>Onboarding / stage (used now):</b> URL in .env (CAIR_SOAP_URL) on "
+        "<b>cdph-interop-stage.cdph.ca.gov</b> — for SF-013259 testing only; HL7 is sent via "
+        "<b>SOAP 1.2 submitSingleMessage</b>. "
+        "<b>Production (later):</b> URL on <b>cdph-interop-prod.cdph.ca.gov</b> — "
+        "switch after CAIR approves go-live.",
         s["bullet"],
     ))
     story.append(wrap_table(
         ["Environment", "Submission endpoint (CAIR_SOAP_URL)"],
         [
-            ["Test / onboarding (now)",
+            ["Onboarding / stage (now)",
              "https://cdph-interop-stage.cdph.ca.gov/services/"
              "client_Service.client_ServiceHttpSoap12Endpoint"],
-            ["Production / real (after approval)",
+            ["Production (after approval)",
              "https://cdph-interop-prod.cdph.ca.gov/services/"
              "client_Service.client_ServiceHttpSoap12Endpoint"],
         ],
         [0.22, 0.78],
+        s,
+    ))
+    story.append(Paragraph("SOAP 1.2 envelope (per WSDL)", s["h2"]))
+    story.append(wrap_table(
+        ["Item", "Value"],
+        [
+            ["WSDL (reference)", "https://cdph-interop-stage.cdph.ca.gov/CASTG-WS/IISService?WSDL"],
+            ["SOAP version", "1.2 (Soap12Endpoint — SOAP 1.1 returns HTTP 500)"],
+            ["Namespace", "urn:cdc:iisb:2011"],
+            ["SOAP action", "urn:cdc:iisb:2011:submitSingleMessage"],
+            ["Body fields", "username, password, facilityID (SF-013259), hl7Message"],
+            [".env credentials", "CAIR_SOAP_USERNAME, CAIR_SOAP_PASSWORD (from CAIR onboarding)"],
+        ],
+        [0.30, 0.70],
         s,
     ))
 
@@ -382,12 +398,12 @@ def build():
     story.append(wrap_table(
         ["Check", "Current state"],
         [
-            ["Test data in Sithum DB", "Ready"],
-            ["IsPublish on test visits", "1 (ready)"],
-            ["SubmitStatus (7 rows)", "0 — not sent to CAIR yet"],
-            ["EHRVaccines.IsSubmitted", "0 — not sent yet"],
-            ["RequestPayload", "Empty — confirms no HL7 was sent"],
-            ["Worker (cair_service.py)", "Not run yet"],
+            ["Test data in Sithum DB", "Ready (7 submissions seeded)"],
+            ["SOAP envelope", "Fixed — SOAP 1.2 per WSDL (HTTP 500 resolved)"],
+            ["CAIR SOAP credentials", "Not set — need username/password from CAIR onboarding"],
+            ["Test sends to CAIR", "Attempted; submissions 1 &amp; 7 failed (no credentials yet)"],
+            ["Best test record", "Submission 7 — KEVIN TEST, checkin 1622, NDC 58160082152"],
+            ["ACK = AA (success)", "Not yet — blocked until credentials are added"],
         ],
         [0.38, 0.62],
         s,
@@ -395,9 +411,11 @@ def build():
 
     story.append(Paragraph("9. Next Steps", s["h1"]))
     for item in [
-        "Run: python scripts/seed_sithum_cair_test_data.py verify",
-        "Run: python cair_service.py",
-        "Email CAIRDataExchange@cdph.ca.gov — request review of test submissions for org SF-013259",
+        "Email CAIRDataExchange@cdph.ca.gov — request onboarding SOAP username/password for org SF-013259.",
+        "Add CAIR_SOAP_USERNAME and CAIR_SOAP_PASSWORD to .env.",
+        "Reset failed rows: python scripts/seed_sithum_cair_test_data.py reset",
+        "Retry send: python run_dry_once.py (or python cair_service.py)",
+        "After ACK = AA, ask CAIR to review test submissions before production go-live.",
     ]:
         story.append(bullet(item, s))
 
