@@ -31,6 +31,7 @@ class CairCoordinator:
             settings.cair_soap_url,
             settings.cair_soap_username,
             settings.cair_soap_password,
+            settings.sending_facility_id,
         )
 
     def run_once(self) -> None:
