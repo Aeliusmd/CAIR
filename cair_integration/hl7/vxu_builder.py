@@ -7,6 +7,7 @@ Field mappings follow:
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -79,11 +80,7 @@ def _format_email_entry(email: str) -> str:
 
 
 def _format_pid13(home_phone: str, cell_phone: str, email: str) -> str:
-    """Build PID-13 per CAIR email requirements.
-
-    CAIR requires at least one of home phone, cell phone, or email.
-    Multiple values are joined with ~ (repetition separator).
-    """
+    """Build PID-13 per CAIR email requirements."""
     parts: List[str] = []
     home = _format_phone_entry(home_phone, "PH")
     cell = _format_phone_entry(cell_phone, "CP")
@@ -97,6 +94,58 @@ def _format_pid13(home_phone: str, cell_phone: str, email: str) -> str:
         parts.append(cell)
 
     return "~".join(parts)
+
+
+def _sanitize_address_line(value: str) -> str:
+    cleaned = re.sub(r"[*?<>]", "", (value or "").strip())
+    if not cleaned or cleaned.upper().startswith("ADDRESS"):
+        return ""
+    return cleaned
+
+
+def _format_ndc(ndc_number: str) -> str:
+    digits = "".join(c for c in ndc_number if c.isdigit())
+    if len(digits) == 11:
+        return f"{digits[:5]}-{digits[5:9]}-{digits[9:11]}"
+    if len(digits) == 10:
+        return f"{digits[:4]}-{digits[4:8]}-{digits[8:10]}"
+    return ndc_number.strip()
+
+
+def _format_dose_amount(value: str) -> str:
+    text = (value or "").strip()
+    if not text or text == "999":
+        return "999"
+    try:
+        return format(float(text), "g")
+    except ValueError:
+        return text
+
+
+def _format_provider(npi: str, last: str, first: str, degree: str = "") -> str:
+    """Format XCN for ORC-12 / RXA-10.
+
+    Components: 1=ID, 2=Family, 3=Given, 9=AssigningAuthority (HD), 13=ID type,
+    21=Professional suffix (MD/NP/RN from Providers.Degree/Title).
+    HD assigning authority: NPPES&2.16.840.1.113883.4.6&ISO
+    (& are subcomponent separators — do not escape).
+    """
+    if not npi:
+        return ""
+    suffix = (degree or "").strip()
+    components = [""] * (22 if suffix else 14)
+    components[1] = _escape_component(npi)
+    components[2] = _escape_component(last)
+    components[3] = _escape_component(first)
+    components[9] = "NPPES&2.16.840.1.113883.4.6&ISO"
+    components[13] = "NPI"
+    if suffix:
+        components[21] = _escape_component(suffix)
+    return "^".join(components[1:])
+
+
+def _provider_org_id(payload: VxuPayload) -> str:
+    return payload.clinic.provider_org_id or ""
 
 
 def build_msh(payload: VxuPayload, message_control_id: str) -> str:
@@ -122,7 +171,7 @@ def build_msh(payload: VxuPayload, message_control_id: str) -> str:
         "",
         "",
         "Z22^CDCPHINVS",
-        clinic.responsible_org_id or clinic.sending_facility_id,
+        _provider_org_id(payload),
     ]
     return f"MSH|{ENCODING_CHARS}|{_join_fields(fields)}"
 
@@ -142,14 +191,17 @@ def build_pid(payload: VxuPayload) -> str:
         if p.mothers_maiden_last
         else ""
     )
-    race = f"{_escape_component(p.race_code)}^{_escape_component(p.race_text)}^CDCREC" if p.race_code else ""
-    address = (
-        f"{_escape_component(p.address_line1)}^^{_escape_component(p.city)}"
-        f"^{_escape_component(p.state)}^{_escape_component(p.zip_code)}^^H"
-    )
+    race = f"{_escape_component(p.race_code)}^^CDCREC" if p.race_code else ""
+    address_line = _sanitize_address_line(p.address_line1)
+    address = ""
+    if address_line and p.city and p.state and p.zip_code:
+        address = (
+            f"{_escape_component(address_line)}^^{_escape_component(p.city)}"
+            f"^{_escape_component(p.state)}^{_escape_component(p.zip_code)}^^H"
+        )
     phone = _format_pid13(p.phone, p.cell_phone, p.email)
     language = f"{p.language_code}^{p.language_text}^HL70296" if p.language_code else ""
-    ethnic = f"{p.ethnic_code}^{p.ethnic_text}^CDCREC" if p.ethnic_code else ""
+    ethnic = f"{_escape_component(p.ethnic_code)}^^CDCREC" if p.ethnic_code else ""
 
     fields = [
         "PID",
@@ -168,6 +220,7 @@ def build_pid(payload: VxuPayload) -> str:
         phone,
         "",
         language,
+        "",
         "",
         "",
         "",
@@ -202,7 +255,7 @@ def build_pd1(payload: VxuPayload) -> str:
         "",
         "",
         "",
-        p.protection_indicator or "Y",
+        p.protection_indicator or "N",
         protection_date,
         "",
         "",
@@ -215,6 +268,12 @@ def build_pd1(payload: VxuPayload) -> str:
 def build_orc(payload: VxuPayload) -> str:
     v = payload.vaccination
     clinic = payload.clinic
+    provider = _format_provider(
+        v.ordering_provider_npi or v.administering_provider_npi,
+        v.ordering_provider_last or v.administering_provider_last,
+        v.ordering_provider_first or v.administering_provider_first,
+        v.ordering_provider_degree or v.administering_provider_degree,
+    )
     fields = [
         "ORC",
         "RE",
@@ -228,7 +287,7 @@ def build_orc(payload: VxuPayload) -> str:
         "",
         "",
         "",
-        "",
+        provider,
         "",
         "",
         "",
@@ -242,31 +301,29 @@ def build_rxa(payload: VxuPayload) -> str:
     v = payload.vaccination
     clinic = payload.clinic
 
-    # CAIR accepts CVX or NDC, not both. Prefer CVX when available.
     if v.cvx_code:
         administered_code = (
             f"{_escape_component(v.cvx_code)}^{_escape_component(v.vaccine_description)}^CVX"
         )
     elif v.ndc_number:
-        # CAIR sample uses dashed NDC with empty description: 00069-1000-03^^NDC
-        administered_code = f"{_escape_component(v.ndc_number)}^^NDC"
+        administered_code = f"{_escape_component(_format_ndc(v.ndc_number))}^^NDC"
     else:
         administered_code = ""
 
-    if v.dose_amount and v.dose_amount != "999":
-        dose_unit = "mL^^UCUM"
-    else:
-        dose_unit = ""
+    dose_amount = _format_dose_amount(v.dose_amount)
+    # CAIR PDF: if RXA-6 supplied, unit should be mL^mL^UCUM
+    dose_unit = "mL^mL^UCUM" if dose_amount != "999" else ""
     admin_notes = "00^NEW IMMUNIZATION RECORD^NIP001"
 
-    provider = ""
-    if v.administering_provider_npi:
-        provider = (
-            f"{v.administering_provider_npi}^{v.administering_provider_last}^"
-            f"{v.administering_provider_first}^^^^^^NPPES^^^^NPI^^^^^^^^"
-        )
+    provider = _format_provider(
+        v.administering_provider_npi or v.ordering_provider_npi,
+        v.administering_provider_last or v.ordering_provider_last,
+        v.administering_provider_first or v.ordering_provider_first,
+        v.administering_provider_degree or v.ordering_provider_degree,
+    )
 
-    location = f"^^^{clinic.responsible_org_id or clinic.sending_facility_id}"
+    site_org = _provider_org_id(payload)
+    location = f"^^^{site_org}" if site_org else ""
     expiration = _hl7_date(v.expiration_date) if v.expiration_date else ""
     manufacturer = (
         f"{_escape_component(v.manufacturer_code)}^^{_escape_component(v.manufacturer_name)}^MVX"
@@ -282,7 +339,7 @@ def build_rxa(payload: VxuPayload) -> str:
         _hl7_date(v.administration_datetime),
         "",
         administered_code,
-        v.dose_amount or "999",
+        dose_amount,
         dose_unit,
         "",
         admin_notes,
@@ -312,7 +369,7 @@ def build_rxr(payload: VxuPayload) -> str:
     return _join_fields(["RXR", route, site])
 
 
-def build_obx(payload: VxuPayload) -> str:
+def build_obx_vfc(payload: VxuPayload) -> str:
     v = payload.vaccination
     obs_value = f"{v.vfc_eligibility_code}^{v.vfc_eligibility_text}^HL70064"
     obs_datetime = _hl7_date(v.administration_datetime)
@@ -322,6 +379,31 @@ def build_obx(payload: VxuPayload) -> str:
         "1",
         "CE",
         "64994-7^Vaccine funding program eligibility category^LN",
+        "1",
+        obs_value,
+        "",
+        "",
+        "",
+        "",
+        "F",
+        "",
+        "",
+        "",
+        obs_datetime,
+    ]
+    return _join_fields(fields)
+
+
+def build_obx_funding_source(payload: VxuPayload) -> str:
+    v = payload.vaccination
+    obs_value = f"{v.funding_source_code}^{v.funding_source_text}^CDCPHINVS"
+    obs_datetime = _hl7_date(v.administration_datetime)
+
+    fields = [
+        "OBX",
+        "2",
+        "CE",
+        "30963-3^Vaccine funding source^LN",
         "1",
         obs_value,
         "",
@@ -352,5 +434,6 @@ def build_vxu_message(payload: VxuPayload, message_control_id: Optional[str] = N
     if rxr:
         segments.append(rxr)
 
-    segments.append(build_obx(payload))
+    segments.append(build_obx_vfc(payload))
+    segments.append(build_obx_funding_source(payload))
     return "\r".join(segments) + "\r"

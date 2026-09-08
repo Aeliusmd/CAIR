@@ -238,5 +238,48 @@ EHRVaccines – Retrieve the vaccine information.
 
 EHRVaccineThirdPartySubmissions – Update the submission status in this table after the CAIR submission is completed
 
+Dear CAIR2 Data Exchange Sites/Vendors, 
+
+You are receiving this email because it was found that your site is continuing to send your vaccination data to CAIR2 via the CDPH Rhapsody gateway using the old WSDL/Endpoint URLs.
+
+As stated in previous email communications sent by CDPH over the past few months, the CDPH Rhapsody gateway was migrated to the cloud on August 31, 2021.  CAIR has allowed the old endpoint to remain active after the deadline of August 31, 2021, however there will be a hard cut-off of the old WSDL/Endpoint URLs on November 15, 2021.  Vaccination messages sent to the old WSDL/Endpoint URLs will not be accepted after November 15, 2021.  Please update your interface to point to the new endpoint/WSDL.  QBPs are no longer accepted if sent to the old WSDL URL.  You will receive a query response asking your site to submit to the new endpoint(see below URLs).   
+
+Note: If you recently migrated over to the new WSDL/Endpoint, you can ignore this email.   
+
+The move to the new cloud endpoint requires that providers change their submission destination URL as follows: 
+
+From (old):  https://cair.cdph.ca.gov/CAPRD-WS/IISService 
+To (new):  https://cdph-interop-prod.cdph.ca.gov/services/client_Service.client_ServiceHttpSoap12Endpoint
+To also implement the new SOAP operation, messages will be submitted via the following SOAP operations:
+
+WSDL 
+
+https://cdph-interop-prod.cdph.ca.gov/CAPRD-WS/IISService?WSDL
+
+Endpoint 
+
+https://cdph-interop-prod.cdph.ca.gov/services/client_Service.client_ServiceHttpSoap12Endpoint
+
+Operations 
+
+VXU 
+
+submitSingleMessage 
+
+QBP 
+
+submitSingleQuery 
+
+See detailed instructions to test and implement the optional SOAP operation.  
+
+Please work with your integration team or EHR vendor to ensure changes are made ASAP. 
+
+Thank you for your patience and continued support as we work to bolster performance of CAIR2, our state immunization registry.   
+
+Please send any questions or concerns to CAIRDataExchange@cdph.ca.gov.  
+
+CAIR2 DX Team
+
+
 
  

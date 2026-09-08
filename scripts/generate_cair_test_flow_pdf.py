@@ -1,6 +1,11 @@
-"""Generate CAIR Test Flow PDF — project status, job flow, DB fields."""
+"""Generate CAIR Test Flow PDF — project status, job flow, DB fields + live HL7.
+
+Reads one EHRVaccineThirdPartySubmissions row (prefer Id=7) and rebuilds HL7
+with vxu_builder so the PDF matches the current code. DB access is read-only.
+"""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -9,9 +14,14 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import PageBreak, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 
-OUTPUT = Path(__file__).resolve().parents[1] / "CAIR_Test_Flow.pdf"
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+OUTPUT = ROOT / "CAIR_Test_Flow.pdf"
 MARGIN = 1.5 * cm
 PAGE_W = A4[0] - 2 * MARGIN
+PREFERRED_SUBMISSION_ID = 7
 
 
 def S():
@@ -62,6 +72,70 @@ def bullet(text: str, styles) -> Paragraph:
     return P(f"&bull; {text}", styles["bullet"])
 
 
+def xml_escape(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def load_live_sample():
+    """Read-only: load preferred submission + build current HL7."""
+    from cair_integration.config import build_direct_clinic_config, get_settings
+    from cair_integration.hl7.vxu_builder import build_vxu_message
+    from cair_integration.repository.cair_submission_repository import (
+        CairSubmissionRepository,
+    )
+
+    settings = get_settings()
+    clinic = build_direct_clinic_config(settings)
+    if not clinic or not settings.clinic_db_connection:
+        return None
+
+    repo = CairSubmissionRepository(settings.clinic_db_connection, clinic)
+    with repo._connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.Id, s.SubmitStatus, s.AttemptCount,
+                   LEFT(ISNULL(s.ErrorMessage, ''), 200) AS Err,
+                   v.Id AS VaccineId, v.CheckInId, v.LotNumber, v.Dosage,
+                   v.VaccineDate, v.VaccineExpirationDate,
+                   p.AccountNumber, p.FirstName, p.LastName, p.DateOfBirth,
+                   p.GenderId, p.Address1, p.City, p.State, p.ZipCode,
+                   p.HomePhone, p.CellPhone, p.Email,
+                   sc.NDCNumber, sc.Description AS VaccineDesc,
+                   pr.NationalProviderIdentifier AS NPI,
+                   pr.FirstName AS ProvFirst, pr.LastName AS ProvLast
+            FROM dbo.EHRVaccineThirdPartySubmissions s
+            JOIN dbo.EHRVaccines v ON v.Id = s.EHRVaccineId
+            JOIN dbo.CheckInsHeader ci ON ci.Id = v.CheckInId
+            JOIN dbo.Patients p ON p.Id = ci.PatientId
+            LEFT JOIN dbo.ServiceCodes sc ON sc.Id = v.ServiceCodeId
+            LEFT JOIN dbo.Providers pr ON pr.Id = ci.ProviderId
+            ORDER BY s.Id
+            """
+        ).fetchall()
+
+    if not rows:
+        return None
+
+    chosen = next((r for r in rows if r.Id == PREFERRED_SUBMISSION_ID), rows[0])
+    payload = repo.load_vxu_payload(int(chosen.Id))
+    control_id = f"DOC-TEST-SUBMISSION-{chosen.Id}"
+    hl7 = build_vxu_message(payload, message_control_id=control_id)
+    return {
+        "settings": settings,
+        "clinic": clinic,
+        "rows": rows,
+        "chosen": chosen,
+        "payload": payload,
+        "hl7": hl7,
+        "control_id": control_id,
+    }
+
+
 def wrap_table(headers: list[str], rows: list[list[str]], col_fracs: list[float], styles):
     widths = [PAGE_W * f for f in col_fracs]
     data = [[P(h, styles["th"]) for h in headers]]
@@ -87,7 +161,8 @@ def build():
 
     story.append(Paragraph("CAIR Test Flow", s["title"]))
     story.append(Paragraph(
-        "ClaudMD / Aeliusmd &rarr; CAIR2 HL7 VXU | Sithum Dev DB | Org SF-013259",
+        "ClaudMD / Aeliusmd &rarr; CAIR2 HL7 VXU | Sithum Dev DB | Vendor Org SF-013259 | "
+        "Updated Sep 2026",
         s["sub"],
     ))
 
@@ -98,11 +173,18 @@ def build():
         "builds HL7 VXU messages, and sends them to CAIR2 over SOAP (submitSingleMessage).",
         "Synced Sithum dev DB (ClaudMD_Development_Sithum) with QA_2 so all CAIR tables/columns match.",
         "Configured .env for Sithum dev using CLINIC_DB_* (direct clinic DB connection).",
-        "Created scripts/seed_sithum_cair_test_data.py to insert test vaccines + queue rows for testing.",
-        "Seeded 7 test submissions in Sithum DB; test sends attempted to CAIR onboarding endpoint.",
-        "Fixed SOAP client to SOAP 1.2 per CAIR WSDL (was HTTP 500 with old SOAP 1.1 envelope).",
-        "Org code from onboarding email is set: SF-013259. Stage/onboarding SOAP URL is set.",
-        "Waiting on CAIR SOAP username/password (CAIR_SOAP_USERNAME / CAIR_SOAP_PASSWORD in .env).",
+        "Created scripts/seed_sithum_cair_test_data.py and scripts/retry_submission.py for testing.",
+        "Seeded 7 test submissions in Sithum DB; live sends to CAIR onboarding endpoint completed.",
+        "Fixed SOAP client to SOAP 1.2 per CAIR WSDL (resolved HTTP 500: SOAP11 binding disabled).",
+        "Received SOAP login for SF-013259; credentials set in .env and login verified (HTTP 200).",
+        "Updated HL7 builder from CAIR ACK errors: race/ethnicity (DataGroups), address sanitize, "
+        "provider NPI, dashed NDC, PD1=N, OBX funding source, MSH-22/RXA-11.4 clinic site org.",
+        "Updated Excel Modification column in Required Fields mapping workbook for implemented fields.",
+        "Confirmed clinic site org for MSH-22 / RXA-11.4: SF-012218 (PROVIDER_ORG_ID). "
+        "Vendor SF-013259 and sample CA0054321 were rejected; SF-012218 accepted (no org blocking error).",
+        "Mapped provider professional suffix (ORC-12.21 / RXA-10.21): prefer Providers.Degree; "
+        "if Degree empty, use Title only when it is a short credential (e.g. MD).",
+        "Latest ACK for submission <b>3</b> is <b>MSA|AA</b> (success) — only informational RXA-6 amount note remains.",
     ]:
         story.append(bullet(item, s))
 
@@ -270,9 +352,28 @@ def build():
             ["Namespace", "urn:cdc:iisb:2011"],
             ["SOAP action", "urn:cdc:iisb:2011:submitSingleMessage"],
             ["Body fields", "username, password, facilityID (SF-013259), hl7Message"],
-            [".env credentials", "CAIR_SOAP_USERNAME, CAIR_SOAP_PASSWORD (from CAIR onboarding)"],
+            [".env credentials", "CAIR_SOAP_USERNAME / CAIR_SOAP_PASSWORD — set and verified"],
+            ["SOAP facilityID", "SF-013259 = vendor/integration org (same as MSH-4)"],
         ],
         [0.30, 0.70],
+        s,
+    ))
+
+    story.append(Paragraph("Two CAIR org codes (important)", s["h2"]))
+    story.append(wrap_table(
+        ["Field", "What it means", "Our value"],
+        [
+            ["SOAP facilityID / MSH-4", "Vendor / integration org (who sends)",
+             "SF-013259 — verified"],
+            ["MSH-22 / RXA-11.4", "Clinic site org (where vaccine was given)",
+             "SF-012218 — PROVIDER_ORG_ID (accepted by CAIR)"],
+        ],
+        [0.28, 0.40, 0.32],
+        s,
+    ))
+    story.append(bullet(
+        "Tested MSH-22 values: SF-013259 rejected (&ldquo;cannot be a vendor&rdquo;); "
+        "CA0054321 rejected (sample doc only); <b>SF-012218 accepted</b> — org blocking error cleared.",
         s,
     ))
 
@@ -283,9 +384,11 @@ def build():
             ["Server", "10.103.0.211"],
             ["Database", "ClaudMD_Development_Sithum"],
             ["Tables read", "EHRVaccineThirdPartySubmissions, EHRVaccines, EHRHeaders, "
-             "CheckInsHeader, Patients, ServiceCodes"],
+             "CheckInsHeader, Patients, ServiceCodes, Providers, DataGroups"],
             ["Tables updated", "EHRVaccineThirdPartySubmissions, EHRVaccines only"],
             ["Worker inserts?", "No — production worker never INSERTs (read + UPDATE only)"],
+            ["MSH-22 source now", ".env PROVIDER_ORG_ID=SF-012218 (not in DB yet). "
+             "Locations has internal Id only — longer term store CairOrgCode per location."],
         ],
         [0.28, 0.72],
         s,
@@ -299,13 +402,16 @@ def build():
         ["Source table", "Columns used in HL7"],
         [
             ["Patients", "AccountNumber, FirstName, LastName, DOB, GenderId, "
-             "HomePhone, CellPhone, Email, Address, City, State, Zip"],
-            ["CheckInsHeader", "Id (check-in), CheckInDate, CheckInTime"],
+             "HomePhone, CellPhone, Email, Address1, City, State, Zip, RaceId, EthnicityId"],
+            ["DataGroups", "Race / ethnicity Description &rarr; CDCREC codes (PID-10, PID-22)"],
+            ["CheckInsHeader", "Id (check-in), CheckInDate, CheckInTime, ProviderId, LocationId"],
+            ["Providers", "NationalProviderIdentifier, FirstName, LastName (ORC-12 / RXA-10)"],
             ["EHRVaccines", "LotNumber, VaccineDate, VaccineTime, Dosage, Manufacturer, "
              "Route, BodySite, VaccineExpirationDate"],
-            ["ServiceCodes", "NDCNumber, Description"],
+            ["ServiceCodes", "NDCNumber (dashed in HL7), Description"],
             ["EHRHeaders", "IsPublish = 1 (filter — only published visits)"],
-            [".env config", "SF-013259 in HL7 as org code (MSH-4, PID-3, RXA site, etc.)"],
+            [".env config", "SENDING_FACILITY_ID=SF-013259 (MSH-4); "
+             "PROVIDER_ORG_ID=SF-012218 (MSH-22 / RXA-11.4)"],
         ],
         [0.26, 0.74],
         s,
@@ -399,74 +505,348 @@ def build():
         ["Check", "Current state"],
         [
             ["Test data in Sithum DB", "Ready (7 submissions seeded)"],
-            ["SOAP envelope", "Fixed — SOAP 1.2 per WSDL (HTTP 500 resolved)"],
-            ["CAIR SOAP credentials", "Not set — need username/password from CAIR onboarding"],
-            ["Test sends to CAIR", "Attempted; submissions 1 &amp; 7 failed (no credentials yet)"],
-            ["Best test record", "Submission 7 — KEVIN TEST, checkin 1622, NDC 58160082152"],
-            ["ACK = AA (success)", "Not yet — blocked until credentials are added"],
+            ["SOAP envelope", "Fixed — SOAP 1.2 (HTTP 500 resolved)"],
+            ["CAIR SOAP credentials", "Received and set — login works (HTTP 200)"],
+            ["Vendor org (MSH-4 / SOAP)", "SF-013259 — working"],
+            ["Clinic site org (MSH-22 / RXA-11.4)", "SF-012218 — accepted (org blocker cleared)"],
+            ["Best test record", "Submission 3 — Oak Pereraa (SubmitStatus=1 SUCCESS, MSA|AA)"],
+            ["HL7 field fixes", "MSH-22/ORC-12.9/ORC-12.21/RXA-10.21 OK; PID-10/11/22 fixed in DB"],
+            ["Tried MSH-22 = SF-013259", "Rejected — cannot be a vendor"],
+            ["Tried MSH-22 = CA0054321", "Rejected — sample doc code only"],
+            ["Tried MSH-22 = SF-012218", "Accepted — no MSH-22 / RXA-11.4 org error"],
+            ["Latest ACK (submission 3)", "MSA|AA — success; only informational RXA-6 amount note"],
+            ["Remaining ACK issues", "None blocking — RXA-6 info only (optional to chase)"],
+            ["PID-10 / PID-11 / PID-22", "Fixed in DB — cleared from ACK"],
+            ["ORC-12.9 assigning authority", "Fixed — not in ACK"],
+            ["ORC-12.21 / RXA-10.21 degree",
+             "Fixed — Degree empty, Title=MD → sent MD; cleared from ACK"],
+            ["ACK = AA (success)", "Yes — submission 3 (2026-09-07)"],
+            ["DB CairOrgCode?", "Not on Locations yet — using .env PROVIDER_ORG_ID=SF-012218"],
         ],
-        [0.38, 0.62],
+        [0.40, 0.60],
         s,
     ))
 
     story.append(Paragraph("9. Next Steps", s["h1"]))
     for item in [
-        "Email CAIRDataExchange@cdph.ca.gov — request onboarding SOAP username/password for org SF-013259.",
-        "Add CAIR_SOAP_USERNAME and CAIR_SOAP_PASSWORD to .env.",
-        "Reset failed rows: python scripts/seed_sithum_cair_test_data.py reset",
-        "Retry send: python run_dry_once.py (or python cair_service.py)",
-        "After ACK = AA, ask CAIR to review test submissions before production go-live.",
+        "Keep .env: SENDING_FACILITY_ID=SF-013259 and PROVIDER_ORG_ID=SF-012218.",
+        "Ask CAIR to review test submissions (especially submission 3 MSA|AA) before production go-live.",
+        "Longer term: EMR adds Locations.CairOrgCode and map "
+        "CheckInsHeader.LocationId &rarr; MSH-22 / RXA-11.4 per site (replace .env for multi-clinic).",
+        "Optional: investigate informational RXA-6 amount warning (0.5 + mL^mL^UCUM still returns Info).",
     ]:
         story.append(bullet(item, s))
 
     story.append(PageBreak())
 
-    # 10. HL7 example + field mapping only
-    story.append(Paragraph("10. HL7 Built from This Record (Sithum DB — submission Id 7)", s["h1"]))
+    # 10. HL7 field mapping (with required / status / sent vs should)
+    story.append(Paragraph("10. Each Field — Source, Required, Status, Sent vs Should Send", s["h1"]))
+    story.append(P(
+        "Based on current code + latest successful submission <b>3</b> (Oak Pereraa, MSA|AA). "
+        "See Required legend below. "
+        "<b>Sent / should send</b> uses latest tested values where applicable.",
+        s["bullet"],
+    ))
+    story.append(Paragraph("Required column legend", s["h2"]))
+    story.append(wrap_table(
+        ["Code", "Meaning"],
+        [
+            ["R", "Required — must send a value"],
+            ["RE", "Required but may be empty — field present; value can be blank"],
+            ["C", "Conditional — required only in some cases (e.g. if shot was given / RXA-9=00)"],
+            ["O", "Optional — not required by CAIR (we may still send it)"],
+        ],
+        [0.12, 0.88],
+        s,
+    ))
+    story.append(Paragraph("Field mapping", s["h2"]))
+    story.append(P(
+        "<b>Kind</b> = where the value comes from: "
+        "<b>DB</b> (ClaudMD table.column), <b>.env</b> (config), "
+        "<b>Fixed</b> (hard-coded in HL7 builder), or <b>Code</b> (default / map in code). "
+        "Link path for doctor: CheckInsHeader.ProviderId &rarr; Providers.",
+        s["bullet"],
+    ))
+    story.append(wrap_table(
+        ["HL7", "Kind", "Source (table.field or .env)", "Req", "Status", "Sent / should"],
+        [
+            ["MSH-3", "Fixed", "Code — sending application name ClaudMD",
+             "O", "OK", "ClaudMD / keep"],
+            ["MSH-4", ".env", ".env SENDING_FACILITY_ID (= SF-013259 vendor org)",
+             "R", "OK", "SF-013259 / keep (not for MSH-22)"],
+            ["MSH-6", ".env", ".env RECEIVING_FACILITY",
+             "R", "OK", "CAIR2 / keep"],
+            ["MSH-9", "Fixed", "Code — VXU^V04^VXU_V04",
+             "R", "OK", "keep"],
+            ["MSH-11", ".env", ".env PROCESSING_ID",
+             "R", "OK", "P / keep"],
+            ["MSH-15/16", "Fixed", "Code — AL|AL",
+             "R", "OK", "AL|AL / keep"],
+            ["MSH-21", "Fixed", "Code — Z22^CDCPHINVS",
+             "RE", "OK", "keep"],
+            ["MSH-22", ".env", ".env PROVIDER_ORG_ID (= SF-012218 clinic site). "
+             "Later: Locations.CairOrgCode",
+             "RE", "OK", "SF-012218 / keep"],
+            ["PID-3", "DB+.env", "DB Patients.AccountNumber + .env SENDING_FACILITY_ID "
+             "(…^^^SF-013259^MR)",
+             "R", "OK", "MRN^^^SF-013259^MR / keep"],
+            ["PID-5", "DB", "DB Patients.LastName, Patients.FirstName "
+             "(+ Initials if middle)",
+             "R", "OK", "Last^First / keep"],
+            ["PID-7", "DB", "DB Patients.DateOfBirth",
+             "R", "OK", "YYYYMMDD / keep"],
+            ["PID-8", "DB+Code", "DB Patients.GenderId → code map "
+             "(1=M, 2=F, 3=U, 4=X)",
+             "R", "OK", "M/F/U/X / keep"],
+            ["PID-10", "DB+Code", "DB Patients.RaceId → DataGroups.Description "
+             "→ CDCREC map (cdc_codes)",
+             "RE", "OK", "2106-3^^CDCREC when RaceId set"],
+            ["PID-11", "DB", "DB Patients.Address1, City, State, ZipCode "
+             "(skip placeholder address)",
+             "RE", "OK", "street^^city^ST^zip^^H"],
+            ["PID-13", "DB", "DB Patients.HomePhone, CellPhone, Email",
+             "RE", "OK", "at least one contact"],
+            ["PID-22", "DB+Code", "DB Patients.EthnicityId → DataGroups.Description "
+             "→ CDCREC map",
+             "RE", "OK", "2186-5^^CDCREC when set"],
+            ["PD1-12", "Code", "Code default N (no DB consent column yet)",
+             "R", "OK", "N / keep"],
+            ["PD1-13", "DB", "DB EHRVaccines.VaccineDate "
+             "(else CheckInsHeader.CheckInDate)",
+             "C", "OK", "vaccine date / keep"],
+            ["ORC-1", "Fixed", "Code — RE",
+             "R", "OK", "RE / keep"],
+            ["ORC-3 / ORC-4", "DB+.env", "DB EHRVaccines.CheckInId "
+             "(= CheckInsHeader.Id) + .env SENDING_FACILITY_ID",
+             "RE", "OK", "checkinId^SF-013259 / keep"],
+            ["ORC-12", "DB", "DB via CheckInsHeader.ProviderId → Providers: "
+             "NationalProviderIdentifier, LastName, FirstName; "
+             ".21 from Degree (else short Title e.g. MD). "
+             ".9 fixed NPPES&amp;OID&amp;ISO in code",
+             "RE", "OK AA", "…NPI^^^^^^^^MD (Degree empty, Title=MD)"],
+            ["RXA-3", "DB", "DB EHRVaccines.VaccineDate + VaccineTime "
+             "(else CheckInsHeader.CheckInDate/Time)",
+             "R", "OK", "YYYYMMDD / keep"],
+            ["RXA-5", "DB", "DB ServiceCodes.NDCNumber "
+             "(via EHRVaccines.ServiceCodeId); dashed in code",
+             "R", "OK", "58160-0821-11^^NDC / keep"],
+            ["RXA-6", "DB", "DB EHRVaccines.Dosage",
+             "R", "OK*", "0.5 (CAIR may Info-warn)"],
+            ["RXA-7", "Code", "Code — mL^mL^UCUM when dose ≠ 999; else blank",
+             "C", "OK", "mL^mL^UCUM / keep"],
+            ["RXA-9", "Fixed", "Code — 00^NEW IMMUNIZATION RECORD^NIP001",
+             "R", "OK", "keep"],
+            ["RXA-10", "DB", "Same as ORC-12 — Providers via "
+             "CheckInsHeader.ProviderId (NPI, name, Degree/Title → .21)",
+             "C", "OK AA", "same …^^^^^^^^MD"],
+            ["RXA-11.4", ".env", ".env PROVIDER_ORG_ID (same as MSH-22)",
+             "C/R", "OK", "^^^SF-012218 / keep"],
+            ["RXA-15", "DB", "DB EHRVaccines.LotNumber",
+             "C/R", "OK", "lot / keep"],
+            ["RXA-20/21", "Fixed", "Code — CP|A",
+             "C/R", "OK", "CP|A / keep"],
+            ["OBX VFC", "Code", "Code default V01^Not VFC eligible^HL70064 "
+             "(no DB VFC column yet)",
+             "R", "OK", "V01 / keep"],
+            ["OBX funding", "Code", "Code default PHC70^Private^CDCPHINVS "
+             "(2nd OBX)",
+             "RE", "OK", "PHC70 / keep"],
+        ],
+        [0.12, 0.10, 0.30, 0.08, 0.10, 0.30],
+        s,
+    ))
+    story.append(bullet(
+        "<b>AA achieved</b> on submission 3. Professional suffix (.21): "
+        "use <b>Providers.Degree</b> if set; if Degree is empty, use <b>Providers.Title</b> "
+        "only when it is a short credential (MD, NP, RN, …). "
+        "Example: Degree empty + Title=MD &rarr; HL7 ends with <b>^^^^^^^^MD</b>.",
+        s,
+    ))
+
+    story.append(PageBreak())
+    story.append(Paragraph("11. Latest Test — Submission 2 (after PID DB fixes)", s["h1"]))
+    story.append(P(
+        "Patient <b>97</b> (BAGYA ADIKARI) updated in DB: Address1=123 Main St, "
+        "City/State/Zip=Los Angeles/CA/90210, RaceId=1082 (White), EthnicityId=1084 "
+        "(Not Hispanic or Latino). Resent submission <b>2</b>. "
+        "MSH-4 = <b>SF-013259</b>, MSH-22 / RXA-11.4 = <b>SF-012218</b>. "
+        "SOAP HTTP 200. ACK = <b>MSA|AE</b>. "
+        "PID-10 / PID-11 / PID-22 / ORC-12.9 <b>cleared</b> from ACK.",
+        s["bullet"],
+    ))
+
+    story.append(Paragraph("11.1 HL7 VXU message sent", s["h2"]))
     story.append(Preformatted(
-        "MSH|^~\\&|ClaudMD|SF-013259||CAIR2|...|VXU^V04^VXU_V04|...|P|2.5.1|||AL|AL|||||Z22^CDCPHINVS|SF-013259\n"
-        "PID|1||100031^^^SF-013259^MR||TEST^KEVIN...|20030314|F|...|ADDRESS 1*^^MAYFAIR^NY^12302...\n"
-        " |^PRN^PH^^^123^1323123~^NET^Internet^sakvith@aeliusmd.com~^PRN^CP^^^213^1231231|...\n"
-        "PD1||||||||||||Y|||||\n"
-        "ORC|RE||1622^SF-013259|1622^SF-013259|...\n"
-        "RXA|0|1|20260816||58160082152^^NDC|0.5|mL^^UCUM|...|^^^SF-013259|...|LOT-CAIR-TEST-003|...\n"
-        "OBX|1|CE|64994-7^...|1|V01^Not VFC eligible^HL70064|...|20260816",
+        "MSH|^~\\&|ClaudMD|SF-013259||CAIR2|20260908060823+0000||VXU^V04^VXU_V04|"
+        "59eabeb3-a0b3-4174-a7a8-9a6c2d06c991|P|2.5.1|||AL|AL|||||Z22^CDCPHINVS|SF-012218\n"
+        "PID|1||100064^^^SF-013259^MR||BAGYA ^ADIKARI^^^^^^L||20000714|F||2106-3^^CDCREC|"
+        "123 Main St^^Los Angeles^CA^90210^^H||^PRN^CP^^^123^4663421||ENG^English^HL70296|"
+        "||||||2186-5^^CDCREC||N||||||\n"
+        "PD1||||||||||||N|20260816||||\n"
+        "ORC|RE||1595^SF-013259|1595^SF-013259||||||||"
+        "1093461063^noor^brian^^^^^^NPPES&2.16.840.1.113883.4.6&ISO^^^^NPI|||||\n"
+        "RXA|0|1|20260816||58160-0842-52^^NDC|0.5|mL^^UCUM||00^NEW IMMUNIZATION RECORD^NIP001|"
+        "1093461063^noor^brian^^^^^^NPPES&2.16.840.1.113883.4.6&ISO^^^^NPI|"
+        "^^^SF-012218||||LOT-CAIR-TEST-001|||||CP|A|20260908060823+0000\n"
+        "OBX|1|CE|64994-7^Vaccine funding program eligibility category^LN|1|"
+        "V01^Not VFC eligible^HL70064|||||F||||20260816\n"
+        "OBX|2|CE|30963-3^Vaccine funding source^LN|1|PHC70^Private^CDCPHINVS|||||F||||20260816",
         s["code"],
     ))
 
-    story.append(Paragraph("Each field — where it comes from", s["h2"]))
+    story.append(Paragraph("11.2 CAIR ACK", s["h2"]))
+    story.append(Preformatted(
+        "MSA|AE|59eabeb3-a0b3-4174-a7a8-9a6c2d06c991\n"
+        "ERR||RXA^1^10^21|...|W|...|Administering Provider degree missing from RXA-10.21.\n"
+        "ERR||ORC^1^12^21|...|W|...|Ordering Provider degree missing from ORC-12.21.\n"
+        "ERR||RXA^1|...|I|...|Incoming Immunization already exists in the system.",
+        s["code"],
+    ))
+
+    story.append(Paragraph("11.3 ACK items", s["h2"]))
     story.append(wrap_table(
-        ["HL7 part", "Field", "Where it comes from"],
+        ["Field", "Sev.", "What we sent", "How should send", "Source / what to do"],
         [
-            ["MSH", "ClaudMD", ".env / code — sending application name"],
-            ["MSH", "SF-013259", ".env SENDING_FACILITY_ID — your CAIR org code"],
-            ["MSH", "CAIR2", ".env RECEIVING_FACILITY — California registry"],
-            ["MSH", "VXU^V04^VXU_V04", "Fixed — vaccination update message type"],
-            ["MSH", "P", ".env PROCESSING_ID — P = production/training mode"],
-            ["MSH", "AL | AL", "Fixed — always accept ack (per CAIR email)"],
-            ["MSH", "Z22^CDCPHINVS", "Fixed — immunization message profile"],
-            ["MSH", "SF-013259 (MSH-22)", ".env RESPONSIBLE_ORG_ID — site that gave vaccine"],
-            ["PID", "100031^^^SF-013259^MR", "Patients.AccountNumber + org code SF-013259"],
-            ["PID", "TEST^KEVIN", "Patients.LastName + Patients.FirstName"],
-            ["PID", "20030314", "Patients.DateOfBirth"],
-            ["PID", "F", "Patients.GenderId (2 = Female)"],
-            ["PID", "ADDRESS 1*^^MAYFAIR^NY^12302", "Patients.Address1, City, State, ZipCode"],
-            ["PID", "^PRN^PH^^^123^1323123", "Patients.HomePhone — home phone in PID-13"],
-            ["PID", "^NET^Internet^sakvith@aeliusmd.com", "Patients.Email — email in PID-13"],
-            ["PID", "^PRN^CP^^^213^1231231", "Patients.CellPhone — cell phone in PID-13"],
-            ["PD1", "Y", "Default in code — protection indicator"],
-            ["ORC", "RE", "Fixed — replace/update order"],
-            ["ORC", "1622^SF-013259", "EHRVaccines.CheckInId (= CheckInsHeader.Id) + org code"],
-            ["RXA", "20260816", "EHRVaccines.VaccineDate — vaccination date"],
-            ["RXA", "58160082152^^NDC", "ServiceCodes.NDCNumber — vaccine product code"],
-            ["RXA", "0.5 | mL^^UCUM", "EHRVaccines.Dosage — dose amount and unit"],
-            ["RXA", "^^^SF-013259", ".env RESPONSIBLE_ORG_ID — where shot was given"],
-            ["RXA", "LOT-CAIR-TEST-003", "EHRVaccines.LotNumber — vaccine lot number"],
-            ["OBX", "64994-7^Vaccine funding...", "Fixed — VFC eligibility observation code"],
-            ["OBX", "V01^Not VFC eligible", "Default in code — not VFC eligible"],
-            ["OBX", "20260816", "EHRVaccines.VaccineDate — observation date"],
+            ["ORC-12.9", "OK",
+             "NPPES&amp;2.16.840.1.113883.4.6&amp;ISO",
+             "Same (keep)",
+             "Code — fixed"],
+            ["MSH-22 / RXA-11.4", "OK",
+             "SF-012218",
+             "SF-012218 (keep)",
+             ".env PROVIDER_ORG_ID"],
+            ["PID-11.1", "OK / Fixed",
+             "123 Main St^^Los Angeles^CA^90210^^H",
+             "Same (keep)",
+             "DB — Patients.Address1/City/State/Zip updated"],
+            ["PID-10", "OK / Fixed",
+             "2106-3^^CDCREC",
+             "Same (keep)",
+             "DB — RaceId=1082 (White)"],
+            ["PID-22", "OK / Fixed",
+             "2186-5^^CDCREC",
+             "Same (keep)",
+             "DB — EthnicityId=1084 (Not Hispanic or Latino)"],
+            ["RXA-10.21", "Warn",
+             "1093461063^noor^brian^^^^^^NPPES&amp;...&amp;ISO^^^^NPI  (no .21)",
+             "...NPI^^^^^^^^MD  (title = MD/NP/RN/PA/DO)",
+             "DB — Providers degree; map to .21"],
+            ["ORC-12.21", "Warn",
+             "Same provider — no .21",
+             "...NPI^^^^^^^^MD  (same title)",
+             "DB — same Providers degree; map to .21"],
+            ["RXA", "Info",
+             "Retry of same immunization",
+             "Use a new vaccine/submission for clean AA test",
+             "CAIR — dose already stored from earlier send"],
         ],
-        [0.12, 0.38, 0.50],
+        [0.11, 0.10, 0.25, 0.26, 0.28],
+        s,
+    ))
+    story.append(bullet(
+        "<b>Title</b> = credential after name (MD, NP, RN, PA, DO), e.g. brian noor, <b>MD</b>.",
+        s,
+    ))
+    story.append(bullet(
+        "Next: add provider degree in DB + HL7 map, then send a <b>new</b> submission for ACK = <b>AA</b>.",
+        s,
+    ))
+
+    story.append(PageBreak())
+    story.append(Paragraph("12. Latest Test — New Message (Submission 3) provider degree + AA", s["h1"]))
+    story.append(P(
+        "Sent a <b>new</b> submission (Id <b>3</b>) — not a retry of #2/#6/#7. "
+        "Patient Oak Pereraa, NDC <b>58160-0821-11</b>, provider brian noor "
+        "(NPI 1093461063). "
+        "Providers row: <b>Degree</b> empty, <b>Title</b>=MD — so HL7 ORC-12.21 / RXA-10.21 "
+        "sent <b>MD</b> (prefer Degree; else short Title credential only). "
+        "Dosage <b>0.5</b> with unit <b>mL^mL^UCUM</b>. "
+        "MSH-4 = <b>SF-013259</b>, MSH-22 / RXA-11.4 = <b>SF-012218</b>. "
+        "SOAP HTTP 200. ACK = <b>MSA|AA</b>. "
+        "Sithum DB: <b>SubmitStatus=1 (SUCCESS)</b>.",
+        s["bullet"],
+    ))
+
+    story.append(Paragraph("12.1 HL7 VXU message sent (RXA / provider focus)", s["h2"]))
+    story.append(Preformatted(
+        "MSH|^~\\&|ClaudMD|SF-013259||CAIR2|...||VXU^V04^VXU_V04|"
+        "e53c9776-48dd-431a-82bf-ffb6cc8ee086|P|2.5.1|||AL|AL|||||Z22^CDCPHINVS|SF-012218\n"
+        "PID|1||100075^^^SF-013259^MR||Pereraa^Oak...||...|...||2106-3^^CDCREC|"
+        "123 Oak Street^^Springfield^IL^62701^^H||...|||||||2186-5^^CDCREC||...\n"
+        "PD1||||||||||||N|...\n"
+        "ORC|RE||1649^SF-013259|1649^SF-013259||||||||"
+        "1093461063^noor^brian^^^^^^NPPES&2.16.840.1.113883.4.6&ISO^^^^NPI^^^^^^^^MD|||||\n"
+        "RXA|0|1|20260816||58160-0821-11^^NDC|0.5|mL^mL^UCUM||00^NEW IMMUNIZATION RECORD^NIP001|"
+        "1093461063^noor^brian^^^^^^NPPES&2.16.840.1.113883.4.6&ISO^^^^NPI^^^^^^^^MD|"
+        "^^^SF-012218||||LOT-CAIR-TEST-002|20270630||||CP|A|...\n"
+        "OBX|1|CE|64994-7^...|1|V01^Not VFC eligible^HL70064|...\n"
+        "OBX|2|CE|30963-3^...|1|PHC70^Private^CDCPHINVS|...",
+        s["code"],
+    ))
+
+    story.append(Paragraph("12.2 CAIR ACK", s["h2"]))
+    story.append(Preformatted(
+        "MSA|AA|e53c9776-48dd-431a-82bf-ffb6cc8ee086\n"
+        "ERR||RXA^1^6|...|I|...|Informational: RXA-6 Administered amount is invalid.",
+        s["code"],
+    ))
+
+    story.append(Paragraph("12.3 ACK items", s["h2"]))
+    story.append(wrap_table(
+        ["Field", "Sev.", "What we sent", "How should send", "Source / note"],
+        [
+            ["ORC-12.21 / RXA-10.21", "OK",
+             "...NPI^^^^^^^^MD",
+             "Send one suffix: Degree first, else short Title",
+             "From Providers table for the visit doctor. "
+             "Rule: (1) if Degree filled → use it; "
+             "(2) else if Title is short credential (MD/NP/RN…) → use Title; "
+             "(3) else blank. "
+             "This test: Degree empty + Title=MD → sent MD"],
+            ["RXA-6", "Info",
+             "0.5",
+             "0.5 (keep) or 999 if unknown",
+             "Informational only — does not block AA"],
+            ["RXA-7", "OK",
+             "mL^mL^UCUM",
+             "mL^mL^UCUM (CAIR PDF)",
+             "Code"],
+            ["RXA-5", "OK",
+             "58160-0821-11^^NDC",
+             "Same (keep)",
+             "ServiceCodes.NDCNumber dashed 5-4-2"],
+            ["MSH-22 / RXA-11.4", "OK",
+             "SF-012218",
+             "Same (keep)",
+             ".env PROVIDER_ORG_ID"],
+            ["ORC-12.9", "OK",
+             "NPPES&amp;OID&amp;ISO",
+             "Same (keep)",
+             "Code — assigning authority"],
+            ["MSA", "AA",
+             "MSA|AA",
+             "MSA|AA (success)",
+             "Sithum SubmitStatus=1 SUCCESS"],
+        ],
+        [0.14, 0.08, 0.22, 0.24, 0.32],
+        s,
+    ))
+    story.append(bullet(
+        "<b>How we take Degree and Title (for ORC-12.21 and RXA-10.21):</b> "
+        "Both come from the visit doctor in <b>Providers</b>. "
+        "We send only <b>one</b> value after the NPI: "
+        "(1) use <b>Degree</b> if it has a value; "
+        "(2) if Degree is empty, use <b>Title</b> only when Title is a short credential "
+        "like MD, DO, NP, RN, PA (not a long job name like Physical Therapist); "
+        "(3) if neither works, leave .21 empty. "
+        "Example this test — brian noor: Degree empty, Title=MD &rarr; HL7 "
+        "<b>...NPI^^^^^^^^MD</b> in both ORC-12 and RXA-10.",
+        s,
+    ))
+    story.append(bullet(
+        "That MD suffix cleared the ORC-12.21 / RXA-10.21 warnings. "
+        "First clean <b>MSA|AA</b> on a new dose. "
+        "RXA-6 info remains non-blocking.",
         s,
     ))
 

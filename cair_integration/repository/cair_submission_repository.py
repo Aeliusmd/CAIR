@@ -15,6 +15,7 @@ import pyodbc
 
 from cair_integration.config import Settings, build_clinic_db_connection
 from cair_integration.constants import FAILED, PENDING, PROCESSING, RETRY, SUCCESS
+from cair_integration.hl7.cdc_codes import map_ethnicity, map_race
 from cair_integration.models import (
     CairSubmissionRecord,
     ClinicConfig,
@@ -25,6 +26,58 @@ from cair_integration.models import (
 
 # ClaudMD GenderId -> HL7 PID-8 (confirm with EMR team if needed)
 GENDER_MAP = {1: "M", 2: "F", 3: "U", 4: "X"}
+
+# Short professional suffixes acceptable for ORC-12.21 / RXA-10.21
+_KNOWN_PROVIDER_SUFFIXES = {
+    "MD",
+    "DO",
+    "NP",
+    "RN",
+    "PA",
+    "PAC",
+    "PA-C",
+    "RPT",
+    "PT",
+    "LAC",
+    "DC",
+    "DDS",
+    "DMD",
+    "DPM",
+    "OD",
+    "PHD",
+    "PHARMD",
+}
+
+
+def _resolve_provider_suffix(degree: str, title: str) -> str:
+    """Prefer Providers.Degree; else Title only if it looks like a short credential (e.g. MD)."""
+    deg = (degree or "").strip()
+    if deg:
+        return deg
+    title_val = (title or "").strip()
+    if not title_val:
+        return ""
+    compact = title_val.replace(".", "").replace(" ", "").upper()
+    if compact in _KNOWN_PROVIDER_SUFFIXES or compact.replace("-", "") in {
+        "PAC",
+        "MD",
+        "DO",
+        "NP",
+        "RN",
+        "PA",
+        "RPT",
+        "PT",
+        "LAC",
+        "DC",
+        "DDS",
+        "DMD",
+        "DPM",
+        "OD",
+        "PHD",
+        "PHARMD",
+    }:
+        return title_val
+    return ""
 
 
 def _combine_datetime(
@@ -141,7 +194,14 @@ class CairSubmissionRepository:
                 v.Route AS route_text,
                 v.BodySite AS site_text,
                 v.VaccineDate AS vaccine_date,
-                v.VaccineTime AS vaccine_time
+                v.VaccineTime AS vaccine_time,
+                pr.NationalProviderIdentifier AS provider_npi,
+                pr.FirstName AS provider_first_name,
+                pr.LastName AS provider_last_name,
+                pr.Degree AS provider_degree,
+                pr.Title AS provider_title,
+                race_dg.Description AS race_description,
+                ethnic_dg.Description AS ethnic_description
             FROM dbo.EHRVaccineThirdPartySubmissions s
             INNER JOIN dbo.EHRVaccines v ON v.Id = s.EHRVaccineId
             INNER JOIN dbo.EHRHeaders h
@@ -149,6 +209,9 @@ class CairSubmissionRepository:
             INNER JOIN dbo.CheckInsHeader ci ON ci.Id = v.CheckInId AND ci.IsDeleted = 0
             INNER JOIN dbo.Patients p ON p.Id = ci.PatientId AND p.IsDeleted = 0
             LEFT JOIN dbo.ServiceCodes sc ON sc.Id = v.ServiceCodeId
+            LEFT JOIN dbo.Providers pr ON pr.Id = ci.ProviderId AND pr.IsDeleted = 0
+            LEFT JOIN dbo.DataGroups race_dg ON race_dg.Id = p.RaceId AND race_dg.IsDeleted = 0
+            LEFT JOIN dbo.DataGroups ethnic_dg ON ethnic_dg.Id = p.EthnicityId AND ethnic_dg.IsDeleted = 0
             WHERE s.Id = ?
         """
         with self._connect() as conn:
@@ -163,6 +226,16 @@ class CairSubmissionRepository:
             row.vaccine_date or datetime.now(timezone.utc),
         )
 
+        race_code, race_text = map_race(str(row.race_description or ""))
+        ethnic_code, ethnic_text = map_ethnicity(str(row.ethnic_description or ""))
+        provider_npi = str(row.provider_npi or "").strip()
+        provider_first = str(row.provider_first_name or "").strip()
+        provider_last = str(row.provider_last_name or "").strip()
+        provider_degree = _resolve_provider_suffix(
+            str(row.provider_degree or ""),
+            str(row.provider_title or ""),
+        )
+
         patient = PatientData(
             acc_no=str(row.patient_acc_no),
             last_name=row.patient_last_name or "",
@@ -170,6 +243,8 @@ class CairSubmissionRepository:
             middle_name=row.patient_middle_name or "",
             date_of_birth=row.patient_dob,
             sex=gender,
+            race_code=race_code,
+            race_text=race_text,
             address_line1=row.patient_address or "",
             city=row.patient_city or "",
             state=row.patient_state or "CA",
@@ -177,6 +252,9 @@ class CairSubmissionRepository:
             phone=row.patient_phone or "",
             cell_phone=row.patient_cell_phone or "",
             email=row.patient_email or "",
+            ethnic_code=ethnic_code,
+            ethnic_text=ethnic_text,
+            protection_effective_date=admin_dt,
         )
 
         vaccination = VaccinationData(
@@ -191,6 +269,14 @@ class CairSubmissionRepository:
             manufacturer_name=str(row.manufacturer_name or ""),
             route_text=str(row.route_text or ""),
             site_text=str(row.site_text or ""),
+            ordering_provider_npi=provider_npi,
+            ordering_provider_first=provider_first,
+            ordering_provider_last=provider_last,
+            ordering_provider_degree=provider_degree,
+            administering_provider_npi=provider_npi,
+            administering_provider_first=provider_first,
+            administering_provider_last=provider_last,
+            administering_provider_degree=provider_degree,
         )
 
         return VxuPayload(patient=patient, vaccination=vaccination, clinic=self._clinic)
@@ -337,7 +423,8 @@ class MasterRepository:
                     clinic_name=row.ClinicName,
                     db_connection_string=conn_str,
                     sending_facility_id=self._settings.sending_facility_id,
-                    responsible_org_id=self._settings.responsible_org_id,
+                    provider_org_id=self._settings.provider_org_id,
+                    responsible_org_id=self._settings.provider_org_id,
                     receiving_facility=self._settings.receiving_facility,
                     processing_id=self._settings.processing_id,
                 )

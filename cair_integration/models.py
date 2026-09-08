@@ -22,15 +22,16 @@ class ClinicConfig:
     clinic_name: str
     db_connection_string: str
     sending_application: str = ""
-    sending_facility_id: str = ""  # MSH-4, PID-3.4 — CAIR org code e.g. SF-013259
-    responsible_org_id: str = ""  # MSH-22, RXA-11.4 — site where vaccine was given
+    sending_facility_id: str = ""  # MSH-4, PID-3.4 — vendor CAIR org code e.g. SF-013259
+    provider_org_id: str = ""  # MSH-22, RXA-11.4 — clinic site org (not vendor)
+    responsible_org_id: str = ""  # deprecated alias for provider_org_id
     receiving_facility: str = "CAIR2"
     processing_id: str = "P"  # P=production, T=training (ONB for onboarding)
     is_active: bool = True
 
     def __post_init__(self) -> None:
-        if not self.responsible_org_id:
-            self.responsible_org_id = self.sending_facility_id
+        if self.responsible_org_id and not self.provider_org_id:
+            self.provider_org_id = self.responsible_org_id
 
 
 @dataclass
@@ -60,7 +61,7 @@ class PatientData:
     multiple_birth: str = "N"
     birth_order: str = ""
     death_indicator: str = ""
-    protection_indicator: str = "Y"
+    protection_indicator: str = "N"
     protection_effective_date: Optional[datetime] = None
 
 
@@ -84,12 +85,16 @@ class VaccinationData:
     site_text: str = ""
     vfc_eligibility_code: str = "V01"
     vfc_eligibility_text: str = "Not VFC eligible"
+    funding_source_code: str = "PHC70"
+    funding_source_text: str = "Private"
     ordering_provider_npi: str = ""
     ordering_provider_last: str = ""
     ordering_provider_first: str = ""
+    ordering_provider_degree: str = ""  # ORC-12.21 professional suffix
     administering_provider_npi: str = ""
     administering_provider_last: str = ""
     administering_provider_first: str = ""
+    administering_provider_degree: str = ""  # RXA-10.21 professional suffix
 
 
 @dataclass

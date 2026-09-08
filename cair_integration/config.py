@@ -63,7 +63,8 @@ def build_direct_clinic_config(settings: "Settings") -> Optional[ClinicConfig]:
         db_connection_string=conn,
         sending_application=settings.sending_application,
         sending_facility_id=settings.sending_facility_id,
-        responsible_org_id=settings.responsible_org_id,
+        provider_org_id=settings.provider_org_id,
+        responsible_org_id=settings.provider_org_id,
         receiving_facility=settings.receiving_facility,
         processing_id=settings.processing_id,
     )
@@ -85,6 +86,7 @@ class Settings:
     max_retry_attempts: int
     sending_application: str
     sending_facility_id: str
+    provider_org_id: str
     receiving_facility: str
     responsible_org_id: str
     processing_id: str
@@ -108,8 +110,9 @@ def get_settings() -> Settings:
         max_retry_attempts=int(os.getenv("MAX_RETRY_ATTEMPTS", "5")),
         sending_application=os.getenv("SENDING_APPLICATION", "ClaudMD"),
         sending_facility_id=os.getenv("SENDING_FACILITY_ID", "SF-013259"),
+        provider_org_id=os.getenv("PROVIDER_ORG_ID", ""),
         receiving_facility=os.getenv("RECEIVING_FACILITY", "CAIR2"),
-        responsible_org_id=os.getenv("RESPONSIBLE_ORG_ID", "SF-013259"),
+        responsible_org_id=os.getenv("PROVIDER_ORG_ID", ""),
         processing_id=os.getenv("PROCESSING_ID", "P"),
         default_activation_key=os.getenv("DEFAULT_ACTIVATION_KEY", ""),
         log_dir=os.getenv("LOG_DIR", "logs"),
