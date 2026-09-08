@@ -850,6 +850,88 @@ def build():
         s,
     ))
 
+    story.append(Paragraph(
+        "12.4 Possible Info / Warn / Error after latest code (when data is wrong or empty)",
+        s["h2"],
+    ))
+    story.append(P(
+        "With current code, mapping is correct. CAIR can still return <b>Info</b>, <b>Warn</b>, "
+        "or <b>Error</b> if clinic DB values are empty, placeholders, or not matching CAIR rules. "
+        "Code bugs for org / NPI assigning authority / Degree&amp;Title / dashed NDC / race map "
+        "are already fixed. Check the cause column below.",
+        s["bullet"],
+    ))
+    story.append(wrap_table(
+        ["Field / ACK", "Sev.", "Seen after latest code?", "Cause type",
+         "DB / .env / CAIR detail", "What to do"],
+        [
+            ["RXA-6 amount", "Info",
+             "Yes — still on AA (sub 3) with 0.5",
+             "CAIR side (not empty DB)",
+             "DB EHRVaccines.Dosage=0.5 was sent with RXA-7 mL^mL^UCUM. "
+             "CAIR still returns Info sometimes.",
+             "No code change required. Optional: ask CAIR. "
+             "If dosage unknown, send 999 and blank RXA-7."],
+            ["ORC-12.21 / RXA-10.21 degree", "Warn",
+             "Only if DB empty / not usable",
+             "DB empty or Title not matching",
+             "Providers.Degree empty AND Title empty "
+             "OR Title is long job name (e.g. Physical Therapist) "
+             "OR CheckInsHeader.ProviderId null (no Providers join)",
+             "Fill Degree or short Title (MD/NP/RN). "
+             "Set ProviderId on the visit."],
+            ["PID-10 race", "Warn",
+             "Only if DB empty / not matching",
+             "DB empty or text not mapped",
+             "Patients.RaceId null/0, or DataGroups.Description "
+             "not in our CDCREC map",
+             "Set RaceId to a known DataGroups value "
+             "(e.g. 1082 White → 2106-3)."],
+            ["PID-22 ethnicity", "Warn",
+             "Only if DB empty / not matching",
+             "DB empty or text not mapped",
+             "Patients.EthnicityId null/0, or Description not mapped",
+             "Set EthnicityId (e.g. 1084 → 2186-5)."],
+            ["PID-11 address", "Warn",
+             "Only if DB empty / bad value",
+             "DB empty or not matching street",
+             "Address1/City/State/Zip empty, or placeholder "
+             "(ADDRESS 1*), or non-street text",
+             "Enter a real street address or leave blank."],
+            ["PID-13 phone/email", "Warn / reject risk",
+             "Only if DB empty",
+             "DB empty",
+             "Patients.HomePhone, CellPhone, Email all empty",
+             "Fill at least one contact (prefer cell + email)."],
+            ["RXA-5 NDC", "Error",
+             "Yes if NDC digits wrong (sub 5)",
+             "DB value not matching CAIR NDC",
+             "ServiceCodes.NDCNumber wrong length/format "
+             "(e.g. 10-digit 5816082152 → bad dash 5816-0821-52)",
+             "Use valid 11-digit NDC in ServiceCodes "
+             "(CAIR accepted 58160-0821-11)."],
+            ["RXA duplicate dose", "Info",
+             "Yes if same shot resent",
+             "CAIR already has immunization",
+             "Not a DB empty issue — retry of same patient/NDC/date/lot",
+             "Use a new vaccine/submission for clean AA."],
+            ["Provider NPI missing", "Warn",
+             "Only if DB empty",
+             "DB empty",
+             "Providers.NationalProviderIdentifier blank "
+             "or ProviderId not set on check-in",
+             "Fill NPI on Providers; link ProviderId."],
+        ],
+        [0.12, 0.07, 0.14, 0.14, 0.28, 0.25],
+        s,
+    ))
+    story.append(bullet(
+        "<b>On submission 3 (latest AA):</b> only RXA-6 <b>Info</b> appeared. "
+        "That is <b>not</b> because Dosage was empty — DB had 0.5. "
+        "All Warn/Error rows above are avoided when patient, provider, NDC, and .env are filled correctly.",
+        s,
+    ))
+
     return story
 
 
